@@ -1,565 +1,444 @@
 #!/bin/bash
 
-# N8N Auto Installation Script for Ubuntu with Docker
-# Compatible with existing NocoDB installation
+# Script tự động cài đặt N8N + NocoDB trên Ubuntu
+# Tác giả: Auto Install Script
+# Phiên bản: 1.0
 
-set -e  # Exit on any error
+set -e
 
-# Colors for output
+# Màu sắc cho output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-DOMAIN="n8n.modaviet.vn"
-N8N_DIR="/opt/n8n"
-ADMIN_USER="admin"
-EMAIL="your-email@domain.com"  # Change this to your email
-
-# Generate random passwords
-POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-12)
-ENCRYPTION_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-
-# Functions
-print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+# Hàm hiển thị thông báo
+print_message() {
+    echo -e "${GREEN}[INFO]${NC} $1"
 }
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if running as root
-check_root() {
-    if [[ $EUID -eq 0 ]]; then
-        print_error "This script should not be run as root. Please run as a regular user with sudo privileges."
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_success() {
+    echo -e "${BLUE}[SUCCESS]${NC} $1"
+}
+
+# Hàm kiểm tra lỗi
+check_error() {
+    if [ $? -ne 0 ]; then
+        print_error "$1"
         exit 1
     fi
 }
 
-# Check prerequisites
-check_prerequisites() {
-    print_status "Checking prerequisites..."
-    
-    # Check if Docker is installed
-    if ! command -v docker &> /dev/null; then
-        print_error "Docker is not installed. Please install Docker first."
-        exit 1
-    fi
-    
-    # Check if Docker Compose is available
-    if ! docker compose version &> /dev/null && ! docker-compose version &> /dev/null; then
-        print_error "Docker Compose is not installed. Please install Docker Compose first."
-        exit 1
-    fi
-    
-    # Determine compose command
-    if docker compose version &> /dev/null; then
-        COMPOSE_CMD="docker compose"
-    else
-        COMPOSE_CMD="docker-compose"
-    fi
-    
-    print_success "Prerequisites check passed"
-}
+# Kiểm tra quyền root
+if [ "$EUID" -ne 0 ]; then 
+    print_error "Vui lòng chạy script với quyền root hoặc sudo"
+    exit 1
+fi
 
-# Check port conflicts
-check_ports() {
-    print_status "Checking for port conflicts..."
-    
-    PORTS_TO_CHECK=(5678 5433)
-    
-    for port in "${PORTS_TO_CHECK[@]}"; do
-        if sudo netstat -tlnp | grep ":$port " > /dev/null; then
-            print_error "Port $port is already in use. Please free this port before continuing."
-            sudo netstat -tlnp | grep ":$port "
-            exit 1
-        fi
-    done
-    
-    print_success "No port conflicts detected"
-}
+# Banner
+clear
+echo -e "${GREEN}"
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║                                                            ║"
+echo "║     SCRIPT CÀI ĐẶT TỰ ĐỘNG N8N + NOCODB + NGINX + SSL    ║"
+echo "║                                                            ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+echo ""
 
-# Install Nginx if not present
-install_nginx() {
-    if ! command -v nginx &> /dev/null; then
-        print_status "Installing Nginx..."
-        sudo apt update
-        sudo apt install -y nginx
-        sudo systemctl enable nginx
-        sudo systemctl start nginx
-        print_success "Nginx installed successfully"
-    else
-        print_status "Nginx is already installed"
-    fi
-}
+# Thu thập thông tin từ người dùng
+print_message "Vui lòng nhập các thông tin cần thiết:"
+echo ""
 
-# Install Certbot if not present
-install_certbot() {
-    if ! command -v certbot &> /dev/null; then
-        print_status "Installing Certbot..."
-        sudo apt update
-        sudo apt install -y certbot python3-certbot-nginx
-        print_success "Certbot installed successfully"
-    else
-        print_status "Certbot is already installed"
-    fi
-}
+read -p "Nhập domain cho N8N (VD: n8n.modaviet.pro.vn): " N8N_DOMAIN
+read -p "Nhập domain cho NocoDB (VD: noco.modaviet.pro.vn): " NOCODB_DOMAIN
+read -p "Nhập email để đăng ký SSL (VD: admin@modaviet.pro.vn): " SSL_EMAIL
+echo ""
 
-# Create N8N directory structure
-create_directories() {
-    print_status "Creating directory structure..."
-    
-    sudo mkdir -p $N8N_DIR/{data,postgres-data}
-    sudo chown -R $USER:$USER $N8N_DIR
-    cd $N8N_DIR
-    
-    print_success "Directory structure created"
-}
+read -p "Nhập mật khẩu cho PostgreSQL Database: " -s POSTGRES_PASSWORD
+echo ""
+read -p "Nhập JWT Secret cho NocoDB (hoặc để trống để tự động tạo): " JWT_SECRET
+echo ""
 
-# Generate .env file
-create_env_file() {
-    print_status "Creating environment file..."
-    
-    cat > $N8N_DIR/.env << EOF
-# PostgreSQL Configuration
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-N8N_DB_PASSWORD=$POSTGRES_PASSWORD
+# Tạo JWT secret nếu để trống
+if [ -z "$JWT_SECRET" ]; then
+    JWT_SECRET=$(openssl rand -base64 32)
+    print_message "JWT Secret đã được tạo tự động"
+fi
 
-# N8N Admin Configuration
-N8N_BASIC_AUTH_USER=$ADMIN_USER
-N8N_BASIC_AUTH_PASSWORD=$ADMIN_PASSWORD
+# Xác nhận thông tin
+echo ""
+print_warning "Xác nhận thông tin:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "N8N Domain       : $N8N_DOMAIN"
+echo "NocoDB Domain    : $NOCODB_DOMAIN"
+echo "SSL Email        : $SSL_EMAIL"
+echo "Postgres Password: ********"
+echo "JWT Secret       : ********"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
 
-# N8N Encryption Key (32 characters)
-N8N_ENCRYPTION_KEY=$ENCRYPTION_KEY
+read -p "Thông tin có chính xác không? (y/n): " confirm
+if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+    print_error "Đã hủy cài đặt"
+    exit 1
+fi
 
-# Domain
-DOMAIN=$DOMAIN
-EOF
-    
-    chmod 600 $N8N_DIR/.env
-    print_success "Environment file created"
-}
+echo ""
+print_success "Bắt đầu quá trình cài đặt..."
+sleep 2
 
-# Create docker-compose.yml
-create_docker_compose() {
-    print_status "Creating Docker Compose configuration..."
-    
-    cat > $N8N_DIR/docker-compose.yml << 'EOF'
+# Bước 1: Cập nhật hệ thống
+print_message "Bước 1/9: Cập nhật hệ thống..."
+apt update && apt upgrade -y
+check_error "Cập nhật hệ thống thất bại"
+
+# Bước 2: Cài đặt các gói cần thiết
+print_message "Bước 2/9: Cài đặt các gói cần thiết..."
+apt install -y apt-transport-https ca-certificates curl software-properties-common ufw
+check_error "Cài đặt các gói cần thiết thất bại"
+
+# Bước 3: Cài đặt Docker
+print_message "Bước 3/9: Cài đặt Docker..."
+if ! command -v docker &> /dev/null; then
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io
+    check_error "Cài đặt Docker thất bại"
+    systemctl start docker
+    systemctl enable docker
+    print_success "Docker đã được cài đặt thành công"
+else
+    print_warning "Docker đã được cài đặt, bỏ qua bước này"
+fi
+
+# Bước 4: Cài đặt Docker Compose
+print_message "Bước 4/9: Cài đặt Docker Compose..."
+if ! command -v docker-compose &> /dev/null; then
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+    check_error "Cài đặt Docker Compose thất bại"
+    print_success "Docker Compose đã được cài đặt thành công"
+else
+    print_warning "Docker Compose đã được cài đặt, bỏ qua bước này"
+fi
+
+# Bước 5: Cài đặt Nginx
+print_message "Bước 5/9: Cài đặt Nginx..."
+if ! command -v nginx &> /dev/null; then
+    apt install -y nginx
+    check_error "Cài đặt Nginx thất bại"
+    systemctl start nginx
+    systemctl enable nginx
+    print_success "Nginx đã được cài đặt thành công"
+else
+    print_warning "Nginx đã được cài đặt, bỏ qua bước này"
+fi
+
+# Bước 6: Cài đặt Certbot
+print_message "Bước 6/9: Cài đặt Certbot..."
+apt install -y certbot python3-certbot-nginx
+check_error "Cài đặt Certbot thất bại"
+
+# Bước 7: Tạo cấu trúc thư mục và file docker-compose
+print_message "Bước 7/9: Tạo cấu trúc thư mục và cấu hình..."
+INSTALL_DIR="/root/apps"
+mkdir -p $INSTALL_DIR/n8n
+mkdir -p $INSTALL_DIR/nocodb
+mkdir -p $INSTALL_DIR/nocodb_db
+
+# Tạo file docker-compose.yml
+cat > $INSTALL_DIR/docker-compose.yml << EOF
 version: '3.8'
 
 services:
-  n8n-postgres:
-    image: postgres:15
-    restart: unless-stopped
-    container_name: n8n-postgres
-    environment:
-      POSTGRES_DB: n8n
-      POSTGRES_USER: n8n
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-    networks:
-      - n8n-network
-    ports:
-      - "5433:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U n8n"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+  # N8N Service
   n8n:
     image: n8nio/n8n:latest
-    restart: unless-stopped
     container_name: n8n
-    environment:
-      # Database
-      DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: n8n-postgres
-      DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: n8n
-      DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
-      
-      # N8N Configuration
-      N8N_HOST: ${DOMAIN}
-      N8N_PORT: 5678
-      N8N_PROTOCOL: https
-      WEBHOOK_URL: https://${DOMAIN}/
-      
-      # Security
-      N8N_BASIC_AUTH_ACTIVE: true
-      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
-      
-      # Timezone
-      GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
-      TZ: Asia/Ho_Chi_Minh
-      
-      # Encryption key
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-      
-      # Additional settings
-      N8N_METRICS: false
-      N8N_LOG_LEVEL: info
-      
+    restart: unless-stopped
     ports:
       - "5678:5678"
+    environment:
+      - N8N_HOST=$N8N_DOMAIN
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://$N8N_DOMAIN/
+      - GENERIC_TIMEZONE=Asia/Ho_Chi_Minh
     volumes:
-      - ./data:/home/node/.n8n
-    depends_on:
-      n8n-postgres:
-        condition: service_healthy
+      - ./n8n:/home/node/.n8n
     networks:
-      - n8n-network
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5678/healthz || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - app-network
+
+  # NocoDB Service
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: nocodb
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - NC_DB=pg://nocodb_db:5432?u=nocodb&p=$POSTGRES_PASSWORD&d=nocodb
+      - NC_AUTH_JWT_SECRET=$JWT_SECRET
+      - NC_PUBLIC_URL=https://$NOCODB_DOMAIN
+      - NC_DISABLE_TELE=true
+    volumes:
+      - ./nocodb:/usr/app/data
+    depends_on:
+      - nocodb_db
+    networks:
+      - app-network
+
+  # PostgreSQL for NocoDB
+  nocodb_db:
+    image: postgres:14-alpine
+    container_name: nocodb_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=nocodb
+      - POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+      - POSTGRES_DB=nocodb
+    volumes:
+      - ./nocodb_db:/var/lib/postgresql/data
+    networks:
+      - app-network
 
 networks:
-  n8n-network:
+  app-network:
     driver: bridge
 EOF
-    
-    print_success "Docker Compose configuration created"
-}
 
-# Create Nginx configuration
-create_nginx_config() {
-    print_status "Creating Nginx configuration..."
-    
-    sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOF
+print_success "File docker-compose.yml đã được tạo"
+
+# Khởi động Docker containers
+print_message "Khởi động Docker containers..."
+cd $INSTALL_DIR
+docker-compose up -d
+check_error "Khởi động Docker containers thất bại"
+sleep 10
+
+# Bước 8: Cấu hình Nginx
+print_message "Bước 8/9: Cấu hình Nginx..."
+
+# Cấu hình cho N8N
+cat > /etc/nginx/sites-available/$N8N_DOMAIN << EOF
 server {
     listen 80;
-    server_name $DOMAIN;
-    
-    # Redirect HTTP to HTTPS
-    return 301 https://\$server_name\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $DOMAIN;
-
-    # SSL Configuration (will be updated by Certbot)
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA;
-    ssl_prefer_server_ciphers on;
-    
-    # Security headers
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-
-    # Maximum file upload size
-    client_max_body_size 100M;
+    server_name $N8N_DOMAIN;
 
     location / {
         proxy_pass http://localhost:5678;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         
         # WebSocket support
+        proxy_read_timeout 86400;
+    }
+}
+EOF
+
+# Cấu hình cho NocoDB
+cat > /etc/nginx/sites-available/$NOCODB_DOMAIN << EOF
+server {
+    listen 80;
+    server_name $NOCODB_DOMAIN;
+
+    client_max_body_size 100M;
+
+    location / {
+        proxy_pass http://localhost:8080;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        
-        # Timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-        
-        # Buffer settings
-        proxy_buffering on;
-        proxy_buffer_size 128k;
-        proxy_buffers 4 256k;
-        proxy_busy_buffers_size 256k;
-    }
-    
-    # Health check endpoint
-    location /healthz {
-        proxy_pass http://localhost:5678/healthz;
+        proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
-        access_log off;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        # Timeout settings
+        proxy_read_timeout 600s;
+        proxy_connect_timeout 600s;
+        proxy_send_timeout 600s;
     }
 }
 EOF
-    
-    # Enable the site
-    sudo ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
-    
-    # Test Nginx configuration
-    if sudo nginx -t; then
-        print_success "Nginx configuration created successfully"
-    else
-        print_error "Nginx configuration test failed"
-        exit 1
-    fi
-}
 
-# Start N8N services
-start_n8n() {
-    print_status "Starting N8N services..."
-    
-    cd $N8N_DIR
-    
-    # Set proper ownership
-    sudo chown -R 1000:1000 data postgres-data
-    
-    # Pull images
-    $COMPOSE_CMD pull
-    
-    # Start services
-    $COMPOSE_CMD up -d
-    
-    # Wait for services to be ready
-    print_status "Waiting for services to start..."
-    sleep 30
-    
-    # Check if services are running
-    if $COMPOSE_CMD ps | grep -q "Up"; then
-        print_success "N8N services started successfully"
-    else
-        print_error "Failed to start N8N services"
-        $COMPOSE_CMD logs
-        exit 1
-    fi
-}
+# Kích hoạt sites
+ln -sf /etc/nginx/sites-available/$N8N_DOMAIN /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/$NOCODB_DOMAIN /etc/nginx/sites-enabled/
 
-# Configure SSL with Let's Encrypt
-configure_ssl() {
-    print_status "Configuring SSL with Let's Encrypt..."
-    
-    # Reload Nginx
-    sudo systemctl reload nginx
-    
-    # Get SSL certificate
-    print_warning "Please make sure your domain $DOMAIN points to this server's IP address"
-    read -p "Press Enter when ready to continue with SSL configuration..."
-    
-    if sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email $EMAIL --redirect; then
-        print_success "SSL certificate configured successfully"
-    else
-        print_warning "SSL configuration failed, but N8N is still accessible via HTTP"
-        print_warning "You can manually configure SSL later with: sudo certbot --nginx -d $DOMAIN"
-    fi
-}
+# Kiểm tra cấu hình Nginx
+nginx -t
+check_error "Cấu hình Nginx không hợp lệ"
 
-# Create maintenance script
-create_maintenance_script() {
-    print_status "Creating maintenance script..."
-    
-    cat > $N8N_DIR/n8n-maintenance.sh << 'EOF'
-#!/bin/bash
+# Khởi động lại Nginx
+systemctl restart nginx
+check_error "Khởi động lại Nginx thất bại"
+print_success "Nginx đã được cấu hình thành công"
 
-# N8N Maintenance Script
-BACKUP_DIR="/opt/backups/n8n"
-N8N_DIR="/opt/n8n"
-DATE=$(date +%Y%m%d_%H%M%S)
+# Bước 9: Cài đặt SSL Certificate
+print_message "Bước 9/9: Cài đặt SSL Certificate..."
+sleep 2
 
-# Determine compose command
-if docker compose version &> /dev/null 2>&1; then
-    COMPOSE_CMD="docker compose"
+print_message "Đang cài đặt SSL cho $N8N_DOMAIN..."
+certbot --nginx -d $N8N_DOMAIN --non-interactive --agree-tos --email $SSL_EMAIL --redirect
+if [ $? -eq 0 ]; then
+    print_success "SSL cho N8N đã được cài đặt thành công"
 else
-    COMPOSE_CMD="docker-compose"
+    print_error "Cài đặt SSL cho N8N thất bại. Vui lòng kiểm tra DNS và thử lại."
 fi
 
-# Create backup directory
-mkdir -p $BACKUP_DIR
+sleep 2
 
-backup_n8n() {
-    echo "=== Backup N8N ==="
-    cd $N8N_DIR
-    
-    # Backup database
-    $COMPOSE_CMD exec -T n8n-postgres pg_dump -U n8n n8n > "$BACKUP_DIR/n8n_db_$DATE.sql"
-    
-    # Backup data directory
-    tar -czf "$BACKUP_DIR/n8n_data_$DATE.tar.gz" data/
-    
-    # Backup configuration files
-    cp docker-compose.yml "$BACKUP_DIR/docker-compose_$DATE.yml"
-    cp .env "$BACKUP_DIR/env_$DATE"
-    
-    echo "Backup completed: $BACKUP_DIR"
-}
+print_message "Đang cài đặt SSL cho $NOCODB_DOMAIN..."
+certbot --nginx -d $NOCODB_DOMAIN --non-interactive --agree-tos --email $SSL_EMAIL --redirect
+if [ $? -eq 0 ]; then
+    print_success "SSL cho NocoDB đã được cài đặt thành công"
+else
+    print_error "Cài đặt SSL cho NocoDB thất bại. Vui lòng kiểm tra DNS và thử lại."
+fi
 
-update_n8n() {
-    echo "=== Update N8N ==="
-    cd $N8N_DIR
-    
-    # Create backup before update
-    backup_n8n
-    
-    # Pull latest images
-    $COMPOSE_CMD pull
-    
-    # Restart services
-    $COMPOSE_CMD down
-    $COMPOSE_CMD up -d
-    
-    echo "N8N updated successfully"
-}
+# Cấu hình tự động gia hạn SSL
+print_message "Cấu hình tự động gia hạn SSL..."
+(crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --quiet --post-hook 'systemctl reload nginx'") | crontab -
+print_success "Tự động gia hạn SSL đã được cấu hình"
 
-restart_n8n() {
-    echo "=== Restart N8N ==="
-    cd $N8N_DIR
-    $COMPOSE_CMD restart
-    echo "N8N restarted successfully"
-}
+# Cấu hình Firewall
+print_message "Cấu hình Firewall..."
+ufw --force enable
+ufw allow 'Nginx Full'
+ufw allow OpenSSH
+ufw allow 22/tcp
+print_success "Firewall đã được cấu hình"
 
-check_health() {
-    echo "=== Health Check ==="
-    cd $N8N_DIR
-    
-    # Check containers
-    echo "Container status:"
-    $COMPOSE_CMD ps
-    
-    echo -e "\nN8N HTTP Status:"
-    curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5678/healthz
-    
-    echo -e "\nDisk usage:"
-    df -h $N8N_DIR
-    
-    echo -e "\nRecent logs:"
-    $COMPOSE_CMD logs --tail=10 n8n
-}
+# Tạo file thông tin
+cat > $INSTALL_DIR/installation-info.txt << EOF
+╔════════════════════════════════════════════════════════════╗
+║           THÔNG TIN CÀI ĐẶT N8N + NOCODB                  ║
+╚════════════════════════════════════════════════════════════╝
 
-show_logs() {
-    cd $N8N_DIR
-    $COMPOSE_CMD logs -f "${2:-n8n}"
-}
+Ngày cài đặt: $(date)
 
-cleanup_backups() {
-    echo "=== Cleanup Old Backups ==="
-    find $BACKUP_DIR -name "n8n_*" -type f -mtime +7 -delete
-    echo "Old backups cleaned up (kept last 7 days)"
-}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+URL TRUY CẬP:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+N8N        : https://$N8N_DOMAIN
+NocoDB     : https://$NOCODB_DOMAIN
 
-case "$1" in
-    backup)
-        backup_n8n
-        ;;
-    update)
-        update_n8n
-        ;;
-    restart)
-        restart_n8n
-        ;;
-    health)
-        check_health
-        ;;
-    logs)
-        show_logs $@
-        ;;
-    cleanup)
-        cleanup_backups
-        ;;
-    *)
-        echo "Usage: $0 {backup|update|restart|health|logs|cleanup}"
-        echo ""
-        echo "  backup  - Create backup of N8N data and database"
-        echo "  update  - Update N8N to latest version"
-        echo "  restart - Restart N8N services"
-        echo "  health  - Check N8N health status"
-        echo "  logs    - Show N8N logs (add service name for specific service)"
-        echo "  cleanup - Remove old backups"
-        exit 1
-        ;;
-esac
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THÔNG TIN DATABASE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Database User     : nocodb
+Database Password : $POSTGRES_PASSWORD
+Database Name     : nocodb
+JWT Secret        : $JWT_SECRET
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THƯ MỤC CÀI ĐẶT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Thư mục chính     : $INSTALL_DIR
+Docker Compose    : $INSTALL_DIR/docker-compose.yml
+Dữ liệu N8N       : $INSTALL_DIR/n8n
+Dữ liệu NocoDB    : $INSTALL_DIR/nocodb
+Database          : $INSTALL_DIR/nocodb_db
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LỆNH QUẢN LÝ HỮU ÍCH:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Di chuyển vào thư mục:
+  cd $INSTALL_DIR
+
+Xem logs:
+  docker-compose logs -f n8n
+  docker-compose logs -f nocodb
+
+Khởi động lại:
+  docker-compose restart n8n
+  docker-compose restart nocodb
+
+Dừng tất cả:
+  docker-compose down
+
+Khởi động tất cả:
+  docker-compose up -d
+
+Cập nhật containers:
+  docker-compose pull
+  docker-compose up -d
+
+Backup dữ liệu:
+  tar -czf backup-\$(date +%Y%m%d).tar.gz $INSTALL_DIR
+
+Kiểm tra SSL:
+  certbot certificates
+
+Gia hạn SSL thủ công:
+  certbot renew
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LƯU Ý BẢO MẬT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- File này chứa thông tin nhạy cảm, vui lòng bảo mật
+- Thay đổi mật khẩu mặc định sau khi đăng nhập
+- Thiết lập backup định kỳ cho dữ liệu
+- SSL sẽ tự động gia hạn mỗi ngày lúc 3:00 AM
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EOF
-    
-    chmod +x $N8N_DIR/n8n-maintenance.sh
-    print_success "Maintenance script created at $N8N_DIR/n8n-maintenance.sh"
-}
 
-# Display final information
-show_final_info() {
-    print_success "N8N installation completed successfully!"
-    echo ""
-    echo "=== Access Information ==="
-    echo "URL: https://$DOMAIN"
-    echo "Username: $ADMIN_USER"
-    echo "Password: $ADMIN_PASSWORD"
-    echo ""
-    echo "=== File Locations ==="
-    echo "Installation directory: $N8N_DIR"
-    echo "Data directory: $N8N_DIR/data"
-    echo "Database data: $N8N_DIR/postgres-data"
-    echo "Configuration: $N8N_DIR/.env"
-    echo "Maintenance script: $N8N_DIR/n8n-maintenance.sh"
-    echo ""
-    echo "=== Useful Commands ==="
-    echo "Check status: cd $N8N_DIR && $COMPOSE_CMD ps"
-    echo "View logs: cd $N8N_DIR && $COMPOSE_CMD logs -f"
-    echo "Restart: cd $N8N_DIR && $COMPOSE_CMD restart"
-    echo "Maintenance: $N8N_DIR/n8n-maintenance.sh health"
-    echo ""
-    echo "=== Important Notes ==="
-    echo "1. Please save the login credentials shown above"
-    echo "2. Database passwords are in $N8N_DIR/.env"
-    echo "3. Regular backups can be created with: $N8N_DIR/n8n-maintenance.sh backup"
-    echo "4. SSL certificate will auto-renew via certbot"
-    echo ""
-    print_warning "Please ensure your domain $DOMAIN points to this server's IP address"
-}
-
-# Main execution
-main() {
-    echo "================================================================"
-    echo "           N8N Auto Installation Script"
-    echo "         Compatible with existing NocoDB"
-    echo "================================================================"
-    echo ""
-    
-    # Prompt for email
-    read -p "Enter your email for SSL certificate (default: $EMAIL): " input_email
-    if [[ ! -z "$input_email" ]]; then
-        EMAIL="$input_email"
-    fi
-    
-    # Prompt for domain confirmation
-    read -p "Confirm domain name (default: $DOMAIN): " input_domain
-    if [[ ! -z "$input_domain" ]]; then
-        DOMAIN="$input_domain"
-    fi
-    
-    print_status "Starting N8N installation for domain: $DOMAIN"
-    
-    check_root
-    check_prerequisites
-    check_ports
-    install_nginx
-    install_certbot
-    create_directories
-    create_env_file
-    create_docker_compose
-    create_nginx_config
-    start_n8n
-    configure_ssl
-    create_maintenance_script
-    show_final_info
-    
-    print_success "Installation completed! N8N should now be accessible at https://$DOMAIN"
-}
-
-# Run main function
-main "$@"
+# Hoàn thành
+clear
+echo -e "${GREEN}"
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║                                                            ║"
+echo "║            CÀI ĐẶT HOÀN TẤT THÀNH CÔNG! 🎉                ║"
+echo "║                                                            ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}URL TRUY CẬP:${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "N8N        : ${YELLOW}https://$N8N_DOMAIN${NC}"
+echo -e "NocoDB     : ${YELLOW}https://$NOCODB_DOMAIN${NC}"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}THÔNG TIN QUAN TRỌNG:${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "✓ Tất cả thông tin đã được lưu tại: ${YELLOW}$INSTALL_DIR/installation-info.txt${NC}"
+echo -e "✓ SSL Certificate đã được cài đặt và tự động gia hạn"
+echo -e "✓ Docker containers đang chạy"
+echo -e "✓ Firewall đã được cấu hình"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}BƯỚC TIẾP THEO:${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "1. Truy cập vào các URL ở trên để thiết lập tài khoản"
+echo -e "2. Đọc file thông tin chi tiết: ${YELLOW}cat $INSTALL_DIR/installation-info.txt${NC}"
+echo -e "3. Thiết lập backup định kỳ cho dữ liệu"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}KIỂM TRA TRẠNG THÁI:${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "cd $INSTALL_DIR && docker-compose ps"
+echo ""
+echo -e "${GREEN}Cảm ơn bạn đã sử dụng script! 🚀${NC}"
+echo ""
