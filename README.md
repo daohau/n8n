@@ -1,8 +1,8 @@
 # Tải script
-wget https://raw.githubusercontent.com/daohau/n8n/refs/heads/main/deploy_n8n_with_postgres.sh
+wget https://raw.githubusercontent.com/daohau/n8n/refs/heads/main/install_n8n_nocodb_v3.sh
 
 # Cấp quyền
-chmod +x deploy_n8n_with_postgres.sh
+chmod +x install_n8n_nocodb_v3.sh
 
 # Chạy
-sudo ./deploy_n8n_with_postgres.sh
+sudo ./install_n8n_nocodb_v3.sh
