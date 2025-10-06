@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script tự động cài đặt & quản lý N8N + NocoDB trên Ubuntu
-# Phiên bản: 3.1 (Sửa lỗi khởi động lại sau khi dừng)
+# Phiên bản: 3.2 (Cải tiến chức năng Restore từ danh sách backup)
 # Tác giả: Dựa trên script gốc và được nâng cấp bởi Gemini
 
 set -e
@@ -81,21 +81,48 @@ backup_data() {
 # Hàm restore dữ liệu
 restore_data() {
     if [ ! -d "$INSTALL_DIR" ]; then
-        mkdir -p "$INSTALL_DIR"
+        print_error "Thư mục cài đặt $INSTALL_DIR không tồn tại."
+        return 1
     fi
     cd "$INSTALL_DIR"
 
-    read -p "Nhập đường dẫn đầy đủ đến file backup (VD: $INSTALL_DIR/backup-YYYY-MM-DD.tar.gz): " BACKUP_FILE
-    if [ ! -f "$BACKUP_FILE" ]; then
-        print_error "File backup không tồn tại!"
-        exit 1
+    # Liệt kê các file backup và lưu vào mảng
+    mapfile -t backup_files < <(find . -maxdepth 1 -name "backup-*.tar.gz" | sort -r)
+
+    if [ ${#backup_files[@]} -eq 0 ]; then
+        print_error "Không tìm thấy file backup nào (có dạng backup-*.tar.gz) trong $INSTALL_DIR"
+        return 1
     fi
+
+    print_message "Vui lòng chọn file backup để restore:"
+    local i=0
+    for file in "${backup_files[@]}"; do
+        printf "  %d. %s\n" "$((++i))" "$(basename "$file")"
+    done
+    echo "  0. Hủy bỏ"
+    
+    read -p "Nhập lựa chọn của bạn: " choice
+    
+    # Validate input
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 0 ] || [ "$choice" -gt "${#backup_files[@]}" ]; then
+        print_error "Lựa chọn không hợp lệ."
+        return 1
+    fi
+
+    if [ "$choice" -eq 0 ]; then
+        print_message "Đã hủy thao tác restore."
+        return 0
+    fi
+
+    # Lấy file backup được chọn từ mảng
+    local BACKUP_FILE="${backup_files[$choice-1]}"
+    print_message "Bạn đã chọn restore từ file: $(basename "$BACKUP_FILE")"
 
     print_warning "CẢNH BÁO: Thao tác này sẽ ghi đè toàn bộ dữ liệu hiện tại trong $INSTALL_DIR."
     read -p "Bạn có chắc chắn muốn tiếp tục? (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         print_error "Đã hủy thao tác restore."
-        exit 1
+        return 1
     fi
 
     print_message "Dừng các services nếu đang chạy..."
@@ -190,7 +217,7 @@ show_management_menu() {
             1) print_message "Trạng thái các services:"; docker-compose ps ;;
             2) docker-compose logs -f n8n ;;
             3) docker-compose logs -f nocodb ;;
-            4) print_message "Khởi động lại tất cả..."; docker-compose up -d; print_success "Hoàn tất!";; # <<< ĐÂY LÀ THAY ĐỔI
+            4) print_message "Khởi động lại tất cả..."; docker-compose up -d; print_success "Hoàn tất!";;
             5) print_message "Dừng và xóa tất cả..."; docker-compose down; print_success "Hoàn tất!";;
             6) 
                 print_message "Đang cập nhật các container..."
@@ -220,7 +247,7 @@ run_install() {
     echo -e "${GREEN}"
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║                                                            ║"
-    echo "║  SCRIPT CÀI ĐẶT & QUẢN LÝ N8N + NOCODB (V3.1 TOÀN DIỆN)    ║"
+    echo "║  SCRIPT CÀI ĐẶT & QUẢN LÝ N8N + NOCODB (V3.2 TOÀN DIỆN)    ║"
     echo "║                                                            ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
