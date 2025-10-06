@@ -17,3 +17,8 @@ sudo ./install_n8n_nocodb_v3.sh
 ```bash
 sudo ./install_n8n_nocodb_v3.sh manage
 ```
+
+# Đăng ký lại SSL
+```bash
+sudo certbot --nginx -d noco.modaviet.pro.vn --non-interactive --agree-tos --email your-email@example.com --redirect
+```
