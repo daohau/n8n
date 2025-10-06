@@ -4,7 +4,7 @@ wget https://raw.githubusercontent.com/daohau/n8n/refs/heads/main/install_n8n_no
 # Cấp quyền
 chmod +x install_n8n_nocodb_v3.sh
 
-# Chạy
+# Cài đặt
 sudo ./install_n8n_nocodb_v3.sh
 
 # Menu quản lý
