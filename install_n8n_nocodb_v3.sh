@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script tự động cài đặt & quản lý N8N + NocoDB trên Ubuntu
-# Phiên bản: 3.0 (Tích hợp Menu Quản lý, .env, Backup/Restore, Uninstall, DNS Check)
+# Phiên bản: 3.1 (Sửa lỗi khởi động lại sau khi dừng)
 # Tác giả: Dựa trên script gốc và được nâng cấp bởi Gemini
 
 set -e
@@ -176,8 +176,8 @@ show_management_menu() {
         echo " 1. Xem trạng thái các services"
         echo " 2. Xem logs N8N (realtime)"
         echo " 3. Xem logs NocoDB (realtime)"
-        echo " 4. Khởi động lại tất cả services"
-        echo " 5. Dừng tất cả services"
+        echo " 4. Khởi động / Khởi động lại tất cả services"
+        echo " 5. Dừng và XÓA tất cả services"
         echo " 6. Cập nhật (pull images mới và khởi động lại)"
         echo " 7. Backup dữ liệu"
         echo " 8. Restore từ backup"
@@ -190,8 +190,8 @@ show_management_menu() {
             1) print_message "Trạng thái các services:"; docker-compose ps ;;
             2) docker-compose logs -f n8n ;;
             3) docker-compose logs -f nocodb ;;
-            4) print_message "Khởi động lại tất cả..."; docker-compose restart; print_success "Hoàn tất!";;
-            5) print_message "Dừng tất cả..."; docker-compose down; print_success "Hoàn tất!";;
+            4) print_message "Khởi động lại tất cả..."; docker-compose up -d; print_success "Hoàn tất!";; # <<< ĐÂY LÀ THAY ĐỔI
+            5) print_message "Dừng và xóa tất cả..."; docker-compose down; print_success "Hoàn tất!";;
             6) 
                 print_message "Đang cập nhật các container..."
                 docker-compose pull
@@ -220,7 +220,7 @@ run_install() {
     echo -e "${GREEN}"
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║                                                            ║"
-    echo "║  SCRIPT CÀI ĐẶT & QUẢN LÝ N8N + NOCODB (V3.0 TOÀN DIỆN)    ║"
+    echo "║  SCRIPT CÀI ĐẶT & QUẢN LÝ N8N + NOCODB (V3.1 TOÀN DIỆN)    ║"
     echo "║                                                            ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
