@@ -6,3 +6,6 @@ chmod +x install_n8n_nocodb_v3.sh
 
 # Chạy
 sudo ./install_n8n_nocodb_v3.sh
+
+# Menu quản lý
+sudo ./install_n8n_nocodb_v3.sh manage
